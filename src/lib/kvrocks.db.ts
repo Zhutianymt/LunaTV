@@ -1,4 +1,4 @@
-/* eslint-disable no-console, @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion */
+/* eslint-disable no-console */
 
 import { BaseRedisStorage } from './redis-base.db';
 
@@ -6,9 +6,14 @@ export class KvrocksStorage extends BaseRedisStorage {
   constructor() {
     const config = {
       url: process.env.KVROCKS_URL!,
-      clientName: 'Kvrocks'
+      clientName: 'Kvrocks',
     };
-    const globalSymbol = Symbol.for('__MOONTV_KVROCKS_CLIENT__');
+
+    // ✅ 多实例隔离（非常关键）
+    const globalSymbol = Symbol.for(
+      `__REDIS_${process.env.REDIS_DB || 0}_${process.env.REDIS_PREFIX || "default"}__`
+    );
+
     super(config, globalSymbol);
   }
 }
