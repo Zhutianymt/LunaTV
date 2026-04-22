@@ -31,6 +31,8 @@ function ensureStringArray(value: any[]): string[] {
 export interface RedisConnectionConfig {
   url: string;
   clientName: string; // 用于日志显示，如 "Redis" 或 "Pika"
+  db?: number;        // 【仅新增】Redis 数据库编号
+  keyPrefix?: string; // 【仅新增】Key 统一前缀
 }
 
 // 添加Redis操作重试包装器
@@ -93,6 +95,8 @@ export function createRedisClient(config: RedisConnectionConfig, globalSymbol: s
     // 创建客户端配置
     const clientConfig: any = {
       url: config.url,
+      database: config.db, // 【仅新增】指定 DB
+      keyPrefix: config.keyPrefix, // 【仅新增】自动前缀
       socket: {
         // 重连策略：指数退避，最大30秒
         reconnectStrategy: (retries: number) => {
@@ -1404,8 +1408,6 @@ export abstract class BaseRedisStorage implements IStorage {
       await this.deleteCache('play_stats_summary');
 
       // 这里可以添加更多实时统计更新逻辑
-      // 比如更新用户统计缓存、内容热度等
-      // 暂时只是清除缓存，实际统计在查询时重新计算
     } catch (error) {
       console.error('更新播放统计失败:', error);
     }
