@@ -35,6 +35,7 @@ import {
   ExternalLink,
   FileText,
   FolderOpen,
+  Layout,
   Settings,
   Shield,
   TestTube,
@@ -46,10 +47,11 @@ import {
   X,
 } from 'lucide-react';
 import { GripVertical, KeyRound, MessageSquare } from 'lucide-react';
+import { pinyin } from 'pinyin-pro';
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import { AdminConfig, AdminConfigResult } from '@/lib/admin.types';
+import { AdminConfig, AdminConfigResult, DEFAULT_CRON_CONFIG } from '@/lib/admin.types';
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 
 import AIRecommendConfig from '@/components/AIRecommendConfig';
@@ -70,6 +72,7 @@ import DownloadConfig from '@/components/OfflineDownloadConfig';
 import EmbyConfig from '@/components/EmbyConfig';
 import CustomAdFilterConfig from '@/components/CustomAdFilterConfig';
 import WatchRoomConfig from '@/components/WatchRoomConfig';
+import HomePageConfig from '@/components/HomePageConfig';
 import PerformanceMonitor from '@/components/admin/PerformanceMonitor';
 import InviteCodeManager from '@/components/InviteCodeManager';
 import PageLayout from '@/components/PageLayout';
@@ -114,6 +117,27 @@ const buttonStyles = {
   toggleThumbOff: 'translate-x-1',
   // 快速操作按钮样式
   quickAction: 'px-3 py-1.5 text-xs font-medium text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-md transition-colors',
+};
+
+/**
+ * 根据名称自动生成 Key（中文转拼音首字母）
+ * @param name 源名称
+ * @returns 生成的 Key
+ */
+const generateKeyFromName = (name: string): string => {
+  if (!name) return '';
+
+  const initials = name
+    .split('')
+    .map((char) => {
+      if (/[a-zA-Z]/.test(char)) return char.toUpperCase();
+      if (/[0-9]/.test(char)) return char;
+      const result = pinyin(char, { pattern: 'first', toneType: 'none' });
+      return result || char;
+    })
+    .join('');
+
+  return initials || name.substring(0, 4).toUpperCase();
 };
 
 // 通用弹窗组件
@@ -302,6 +326,9 @@ interface SiteConfig {
   TMDBApiKey?: string;
   TMDBLanguage?: string;
   EnableTMDBActorSearch?: boolean;
+  // Bangumi API 代理
+  BangumiApiType?: string;
+  BangumiApiProxy?: string;
 }
 
 // Cron 配置类型
@@ -449,6 +476,8 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
 
   // 用户组筛选状态
   const [filterUserGroup, setFilterUserGroup] = useState<string>('all');
+  // 用户名搜索状态
+  const [filterUsername, setFilterUsername] = useState<string>('');
 
   // 🔑 TVBox Token 管理状态
   const [showTVBoxTokenModal, setShowTVBoxTokenModal] = useState(false);
@@ -1357,6 +1386,15 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
                 </option>
               ))}
             </select>
+            {/* 用户名搜索框 */}
+            <input
+              type='search'
+              aria-label='搜索用户名'
+              value={filterUsername}
+              onChange={(e) => setFilterUsername(e.target.value)}
+              placeholder='搜索用户名...'
+              className='px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent w-44'
+            />
           </div>
           <div className='flex items-center space-x-2'>
             {/* 批量操作按钮 */}
@@ -1579,6 +1617,12 @@ const UserConfig = ({ config, role, refreshConfig }: UserConfigProps) => {
                   return priority(a) - priority(b);
                 })
                 .filter((user) => {
+                  // 用户名搜索过滤
+                  if (filterUsername.trim()) {
+                    if (!user.username.toLowerCase().includes(filterUsername.trim().toLowerCase())) {
+                      return false;
+                    }
+                  }
                   // 根据选择的用户组筛选用户
                   if (filterUserGroup === 'all') {
                     return true; // 显示所有用户
@@ -3633,7 +3677,7 @@ const VideoSourceConfig = ({
       const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
 
       if (exportFormat === 'array') {
-        // 数组格式：[{name, key, api, detail, disabled, is_adult}]
+        // 数组格式：[{name, key, api, detail, disabled, is_adult, type, weight}]
         exportData = sourcesToExport.map((source) => ({
           name: source.name,
           key: source.key,
@@ -3641,10 +3685,12 @@ const VideoSourceConfig = ({
           detail: source.detail || '',
           disabled: source.disabled || false,
           is_adult: source.is_adult || false,
+          type: source.type || 'vod',
+          weight: source.weight ?? 50,
         }));
         filename = `video_sources_${timestamp}.json`;
       } else {
-        // 配置文件格式：{"api_site": {"key": {name, api, detail?, is_adult?}}}
+        // 配置文件格式：{"api_site": {"key": {name, api, detail?, is_adult?, type?, weight?}}}
         exportData = { api_site: {} };
         sourcesToExport.forEach((source) => {
           const sourceData: any = {
@@ -3657,6 +3703,12 @@ const VideoSourceConfig = ({
           }
           if (source.is_adult) {
             sourceData.is_adult = source.is_adult;
+          }
+          if (source.type && source.type !== 'vod') {
+            sourceData.type = source.type;
+          }
+          if (source.weight !== undefined && source.weight !== 50) {
+            sourceData.weight = source.weight;
           }
           exportData.api_site[source.key] = sourceData;
         });
@@ -3764,6 +3816,8 @@ const VideoSourceConfig = ({
             api: item.api,
             detail: item.detail || '',
             is_adult: item.is_adult || false,
+            type: item.type || 'vod',
+            weight: item.weight ?? 50,
           });
 
           result.success++;
@@ -4148,7 +4202,8 @@ const VideoSourceConfig = ({
               onChange={(e) => {
                 const name = e.target.value;
                 const isAdult = /^(AV-|成人|伦理|福利|里番|R18)/i.test(name);
-                setNewSource((prev) => ({ ...prev, name, is_adult: isAdult }));
+                const autoKey = generateKeyFromName(name);
+                setNewSource((prev) => ({ ...prev, name, key: autoKey, is_adult: isAdult }));
               }}
               className='px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100'
             />
@@ -5179,6 +5234,8 @@ const SiteConfigComponent = ({ config, refreshConfig }: { config: AdminConfig | 
     DoubanProxy: '',
     DoubanImageProxyType: 'direct',
     DoubanImageProxy: '',
+    BangumiApiType: 'server',
+    BangumiApiProxy: '',
     EnablePuppeteer: false, // 默认关闭 Puppeteer
     DoubanCookies: '', // 默认无 Cookies
     DisableYellowFilter: false,
@@ -5192,18 +5249,13 @@ const SiteConfigComponent = ({ config, refreshConfig }: { config: AdminConfig | 
   });
 
   // Cron 配置状态
-  const [cronSettings, setCronSettings] = useState<CronConfig>({
-    enableAutoRefresh: true,
-    maxRecordsPerRun: 100,
-    onlyRefreshRecent: true,
-    recentDays: 30,
-    onlyRefreshOngoing: true,
-  });
+  const [cronSettings, setCronSettings] = useState<CronConfig>(DEFAULT_CRON_CONFIG);
 
   // 豆瓣数据源相关状态
   const [isDoubanDropdownOpen, setIsDoubanDropdownOpen] = useState(false);
   const [isDoubanImageProxyDropdownOpen, setIsDoubanImageProxyDropdownOpen] =
     useState(false);
+  const [isBangumiApiDropdownOpen, setIsBangumiApiDropdownOpen] = useState(false);
 
   // 豆瓣数据源选项
   const doubanDataSourceOptions = [
@@ -5214,7 +5266,15 @@ const SiteConfigComponent = ({ config, refreshConfig }: { config: AdminConfig | 
       label: '豆瓣 CDN By CMLiussss（腾讯云）',
     },
     { value: 'cmliussss-cdn-ali', label: '豆瓣 CDN By CMLiussss（阿里云）' },
+    { value: 'cmliussss-unified', label: '豆瓣 CDN By CMLiussss（统一域名）' },
     { value: 'custom', label: '自定义代理' },
+  ];
+
+  // Bangumi API 代理选项
+  const bangumiApiTypeOptions = [
+    { value: 'server', label: '服务端转发（默认，访问官方 api.bgm.tv）' },
+    { value: 'cmliussss', label: 'Bangumi 反代 By CMLiussss（解决服务器被墙）' },
+    { value: 'custom', label: '自定义反代地址' },
   ];
 
   // 豆瓣图片代理选项
@@ -5241,6 +5301,7 @@ const SiteConfigComponent = ({ config, refreshConfig }: { config: AdminConfig | 
         };
       case 'cmliussss-cdn-tencent':
       case 'cmliussss-cdn-ali':
+      case 'cmliussss-unified':
         return {
           text: 'Thanks to @CMLiussss',
           url: 'https://github.com/cmliu',
@@ -5259,6 +5320,8 @@ const SiteConfigComponent = ({ config, refreshConfig }: { config: AdminConfig | 
         DoubanImageProxyType:
           config.SiteConfig.DoubanImageProxyType || 'direct',
         DoubanImageProxy: config.SiteConfig.DoubanImageProxy || '',
+        BangumiApiType: config.SiteConfig.BangumiApiType || 'server',
+        BangumiApiProxy: config.SiteConfig.BangumiApiProxy || '',
         EnablePuppeteer: config.DoubanConfig?.enablePuppeteer || false,
         DoubanCookies: config.DoubanConfig?.cookies || '',
         DisableYellowFilter: config.SiteConfig.DisableYellowFilter || false,
@@ -5277,11 +5340,11 @@ const SiteConfigComponent = ({ config, refreshConfig }: { config: AdminConfig | 
   useEffect(() => {
     if (config?.CronConfig) {
       setCronSettings({
-        enableAutoRefresh: config.CronConfig.enableAutoRefresh ?? true,
-        maxRecordsPerRun: config.CronConfig.maxRecordsPerRun ?? 100,
-        onlyRefreshRecent: config.CronConfig.onlyRefreshRecent ?? true,
-        recentDays: config.CronConfig.recentDays ?? 30,
-        onlyRefreshOngoing: config.CronConfig.onlyRefreshOngoing ?? true,
+        enableAutoRefresh: config.CronConfig.enableAutoRefresh ?? DEFAULT_CRON_CONFIG.enableAutoRefresh,
+        maxRecordsPerRun: config.CronConfig.maxRecordsPerRun ?? DEFAULT_CRON_CONFIG.maxRecordsPerRun,
+        onlyRefreshRecent: config.CronConfig.onlyRefreshRecent ?? DEFAULT_CRON_CONFIG.onlyRefreshRecent,
+        recentDays: config.CronConfig.recentDays ?? DEFAULT_CRON_CONFIG.recentDays,
+        onlyRefreshOngoing: config.CronConfig.onlyRefreshOngoing ?? DEFAULT_CRON_CONFIG.onlyRefreshOngoing,
       });
     }
   }, [config]);
@@ -5638,6 +5701,79 @@ const SiteConfigComponent = ({ config, refreshConfig }: { config: AdminConfig | 
             />
             <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
               自定义图片代理服务器地址
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Bangumi API 代理设置 */}
+      <div className='space-y-3'>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            Bangumi 数据代理
+          </label>
+          <div className='relative' data-dropdown='bangumi-api'>
+            <button
+              type='button'
+              onClick={() => setIsBangumiApiDropdownOpen(!isBangumiApiDropdownOpen)}
+              className="w-full px-3 py-2.5 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-200 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 shadow-sm hover:border-gray-400 dark:hover:border-gray-500 text-left"
+            >
+              {bangumiApiTypeOptions.find(o => o.value === siteSettings.BangumiApiType)?.label}
+            </button>
+            <div className='absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none'>
+              <ChevronDown className={`w-4 h-4 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${isBangumiApiDropdownOpen ? 'rotate-180' : ''}`} />
+            </div>
+            {isBangumiApiDropdownOpen && (
+              <div className='absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-60 overflow-auto'>
+                {bangumiApiTypeOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type='button'
+                    onClick={() => {
+                      setSiteSettings(prev => ({ ...prev, BangumiApiType: option.value }));
+                      setIsBangumiApiDropdownOpen(false);
+                    }}
+                    className={`w-full px-3 py-2.5 text-left text-sm transition-colors duration-150 flex items-center justify-between hover:bg-gray-100 dark:hover:bg-gray-700 ${siteSettings.BangumiApiType === option.value ? 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400' : 'text-gray-900 dark:text-gray-100'}`}
+                  >
+                    <span className='truncate'>{option.label}</span>
+                    {siteSettings.BangumiApiType === option.value && (
+                      <Check className='w-4 h-4 text-green-600 dark:text-green-400 shrink-0 ml-2' />
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+            选择获取 Bangumi 番剧数据的方式，服务器无法访问 api.bgm.tv 时可切换反代
+          </p>
+          {siteSettings.BangumiApiType === 'cmliussss' && (
+            <div className='mt-3'>
+              <button
+                type='button'
+                onClick={() => window.open('https://github.com/cmliu', '_blank')}
+                className='flex items-center justify-center gap-1.5 w-full px-3 text-xs text-gray-500 dark:text-gray-400 cursor-pointer'
+              >
+                <span className='font-medium'>Thanks to @CMLiussss</span>
+                <ExternalLink className='w-3.5 opacity-70' />
+              </button>
+            </div>
+          )}
+        </div>
+        {siteSettings.BangumiApiType === 'custom' && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Bangumi 反代地址
+            </label>
+            <input
+              type='text'
+              placeholder='例如: https://bgm-proxy.example.com'
+              value={siteSettings.BangumiApiProxy || ''}
+              onChange={(e) => setSiteSettings(prev => ({ ...prev, BangumiApiProxy: e.target.value }))}
+              className="w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-200 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 shadow-sm hover:border-gray-400 dark:hover:border-gray-500"
+            />
+            <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+              与官方 api.bgm.tv 路径兼容的反代地址，不含末尾斜杠
             </p>
           </div>
         )}
@@ -6950,9 +7086,11 @@ const LiveSourceConfig = ({
               type='text'
               placeholder='名称'
               value={newLiveSource.name}
-              onChange={(e) =>
-                setNewLiveSource((prev) => ({ ...prev, name: e.target.value }))
-              }
+              onChange={(e) => {
+                const name = e.target.value;
+                const autoKey = generateKeyFromName(name);
+                setNewLiveSource((prev) => ({ ...prev, name, key: autoKey }));
+              }}
               className='px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100'
             />
             <input
@@ -7546,6 +7684,7 @@ function AdminPageClient() {
     sourceTest: false,
     liveSource: false,
     siteConfig: false,
+    homePageConfig: false,
     categoryConfig: false,
     netdiskConfig: false,
     aiRecommendConfig: false,
@@ -7711,6 +7850,21 @@ function AdminPageClient() {
               onToggle={() => toggleTab('siteConfig')}
             >
               <SiteConfigComponent config={config} refreshConfig={fetchConfig} />
+            </CollapsibleTab>
+
+            {/* 首页模块配置标签 */}
+            <CollapsibleTab
+              title='首页模块配置'
+              icon={
+                <Layout
+                  size={20}
+                  className='text-gray-600 dark:text-gray-400'
+                />
+              }
+              isExpanded={expandedTabs.homePageConfig}
+              onToggle={() => toggleTab('homePageConfig')}
+            >
+              <HomePageConfig config={config} refreshConfig={fetchConfig} />
             </CollapsibleTab>
 
             {/* 用户配置标签 */}
@@ -7958,7 +8112,7 @@ function AdminPageClient() {
                 isExpanded={expandedTabs.trustedNetworkConfig}
                 onToggle={() => toggleTab('trustedNetworkConfig')}
               >
-                <TrustedNetworkConfig config={config} refreshConfig={fetchConfig} />
+                <TrustedNetworkConfig />
               </CollapsibleTab>
             )}
 
